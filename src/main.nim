@@ -166,64 +166,152 @@ method onMouseDown(self: TimeCtrl) =
   if mx - x > 36 and my - y > 0 and mx - x < 48 and my - y < 10:
     accel = offsetAccel(accel,  1)
     echo "more accel"
-  
+
   echo &"clicked on time control at {mx-x}, {my-y}"
-  
-  
+
 # --- mapobj ---
-  
-proc newMapObj(x, y: int): MapObj =
+
+proc newMapObj(x, y, vx, vy: int): MapObj =
   result = new(MapObj)
   result.pos = vec2f(float(x), float(y))
-  result.vel = vec2f(0.0, 0.0)
+  result.vel = vec2f(float(vx), float(vy))
   result.mass = 1000
-             
 
 proc draw(self: MapObj) =
-  if (frame_t div 10) mod 9 == 0:
+  let
+    dx = pos.x div map.scale - map.view.x + (64 * map.scale)
+    dy = pos.y div map.scale - map.view.y + (64 * map.scale)
+    norm_vel = 10 * vel.normalized()
+  if accel > 0 and (game_t div 10) mod 9 == 0:
+    setColor(5)
+    circ(dx, dy, 5)
     return
-  setColor(11)
-  circ(int(pos.x), int(pos.y), 5)
+  if self == sel:
+    setColor(11) # player
+    line(dx, dy, dx + norm_vel.x, dy + norm_vel.y)
+    circ(dx, dy, 5)
+  elif self == tgt:
+    setColor(8) # target
+    line(dx, dy, dx + norm_vel.x, dy + norm_vel.y)
+    circ(dx, dy, 5)
+    let dist = ((sel.pos - pos).length() / 1000).int
+    let rvel = (sel.vel - vel).length().int()
+    print(&"{dist}km", dx + 8, dy + 1)
+    print(&"{rvel}m/s", dx + 8, dy - 5)
+  else:
+    setColor(7) # other
+    line(dx, dy, dx + norm_vel.x, dy + norm_vel.y)
+    circ(dx, dy, 5)
 
 # --- map ---
-      
+
+proc newMap(): Map =
+  result = new(Map)
+  result.x = 0
+  result.y = 10
+  result.h = 100
+  result.w = 128
+  result.scale = 1000
+  result.objs = @[]
+
 method draw(self: Map) =
   for obj in objs:
     obj.draw()
 
+method onHoverOver(self: Map) =
+  if btn(pcLeft):
+    view.x -= 3
+  if btn(pcRight):
+    view.x += 3
+  if btn(pcUp):
+    view.y -= 3
+  if btn(pcDown):
+    view.y += 3
+  if btnp(pcA):
+    scale = scale div 2
+    echo &"scale = {scale}"
+  if btnp(pcB):
+    scale *= 2
+    echo &"scale = {scale}"
+
+
 # --- setup ---
-    
+
+proc switch_gui_btn_cb(btn: Button) =
+  main_gui.sub_gui = sub_guis[btn.label]
+
 proc gameInit =
   # game
-  sel = newMapObj(30, 30)
-  tgt = newMapObj(50, 60)
-  map.objs.add(sel)
-  map.objs.add(tgt)
+  frame_t = 0
+  game_t = 0
+  accel = 0 # time acceleration
+  map = newMap()
+  for i in 0..10:
+    map.objs.add(newMapObj(rand(128000), rand(128000), -1000 + rand(2000), - 1000 + rand(2000)))
+
+  sel = map.objs[0]
+  tgt = map.objs[1]
+
   # gui
   main_gui = newGui()
-  main_gui.widgets.add(newButton(0, 0, 16, 10, "NAV"))
-  main_gui.widgets.add(newButton(20, 0, 16, 10, "TGT"))
-  main_gui.widgets.add(newButton(60, 0, 16, 10, "CRW"))
-  main_gui.widgets.add(newButton(40, 0, 16, 10, "COM"))
-  main_gui.widgets.add(newButton(80, 0, 16, 10, "ENG"))
-  main_gui.widgets.add(newButton(100, 0, 16, 10, "CBT"))
+  # add common elements
+  main_gui.widgets.add(newButton(0, 0, 16, 10, "NAV", switch_gui_btn_cb))
+  main_gui.widgets.add(newButton(20, 0, 16, 10, "TGT", switch_gui_btn_cb))
+  main_gui.widgets.add(newButton(60, 0, 16, 10, "CRW", switch_gui_btn_cb))
+  main_gui.widgets.add(newButton(40, 0, 16, 10, "COM", switch_gui_btn_cb))
+  main_gui.widgets.add(newButton(80, 0, 16, 10, "ENG", switch_gui_btn_cb))
+  main_gui.widgets.add(newButton(100, 0, 16, 10, "CBT", switch_gui_btn_cb))
   main_gui.widgets.add(newTimeCtrl(80, 118, 48, 10))
-  main_gui.widgets.add(newPanelLabel(20, 70, 30, 10, "spd", sel.vel.x, "m/s"))
+
+  var
+    nav_sub_gui = newGui()
+    tgt_sub_gui = newGui()
+    crw_sub_gui = newGui()
+    com_sub_gui = newGui()
+    eng_sub_gui = newGui()
+    cbt_sub_gui = newGui()
+
+  nav_sub_gui.widgets.add(map)
+  nav_sub_gui.widgets.add(newPanelLabel(0, 118, 30, 10, "TRS", "tgt_rel_spd", "m/s"))
+
+  sub_guis = { "NAV": nav_sub_gui,
+               "TGT": tgt_sub_gui,
+               "CRW": crw_sub_gui,
+               "COM": com_sub_gui,
+               "ENG": eng_sub_gui,
+               "CBT": cbt_sub_gui }.toTable
   current_gui = main_gui
+  current_gui.sub_gui = sub_guis["NAV"]
+
+# --- simulation ---
+
+proc simulate(dt: float32) =
+  let factor = float(accel) * dt
+  for mapobj in map.objs:
+    mapobj.pos += mapobj.vel * factor
+  if frame_t mod 60 == 0:
+    echo &"game_t={game_t} tgt.pos={tgt.pos} tgt.vel={tgt.vel} {tgt.vel.normalized()}"
+  let tgt_spd = (sel.vel - tgt.vel).length()
+  gui_floats["tgt_rel_spd"] = tgt_spd
 
 # --- nico callbacks ---
-  
+
 proc gameUpdate(dt: float32) =
   let (x, y) = mouse()
   if mousebtnp(0):
     current_gui.mouseDownEvent()
+  let w = current_gui.sub_gui.findHoveredWidget()
+  if w != nil:
+    w.onHoverOver()
   current_gui.update()
+  current_gui.sub_gui.update()
   frame_t = frame_t + 1
   game_t = game_t + accel
+  simulate(dt)
 
 proc gameDraw =
   cls()
-  map.draw()
+  current_gui.sub_gui.draw()
   current_gui.draw()
 
 # --- main ---
